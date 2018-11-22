@@ -1,0 +1,158 @@
+- javadoc 주석문 /** ... */
+- java api문서를 생성하는 방법
+
+** try, catch, throw , throws 
+
+- Exception전략
+  * 오류가 발생하면 사용자에게 적절한 화면을 보여준다.
+  * 반쯤 완성된 화면을 보여준다.(x)
+  * 하얀 화면을 보여주면 안된다.(x)
+            
+    +--> @ControllerAdvice 에게 Exception을 전달한다.
+    |
+Controller
+    |
+    v 
+Service      메소드 throws BizException;
+    |
+    v
+  Repository  
+
+- @ControllerAdvice는 여러개 선언할 수 있다.
+    - @Controller가 오류가 발생했을 때 처리하는 @ControllerAdvice
+    - @RestController가 오류가 발생했을 때 처리하는 @ControllerAdvice
+
+입력값. 비지니스로직 수행, 컨트롤러에서 실행되는 별도의 코드 을 수행할 수 있을 때 발생하는 Exception을 처리한다. 
+
+------------------------------------------------------------
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+
+// Controller애노테이션이 붙은 클래스에 대한 처리
+@ControllerAdvice(annotations = Controller.class)
+@Order(2) // 여러개 선언되었을 때 우선순위가 있다.
+public class GlobalControllerExceptionHandler {
+
+    @ExceptionHandler(value = Exception.class)
+    public String handleException(Exception e) {
+        // e를 로그로 남긴다던지 slack으로 보낸다던지.
+        // view 이름을 리턴
+        return "exceptions/exception";
+    }
+}
+
+-------------------------------------------------------------
+
+오류 메시지를 담을 객체를 선언
+
+@Setter
+@Getter
+public class ApiError {
+    private HttpStatus status;
+    private String message;
+
+
+    public ApiError(HttpStatus status, String message) {
+        super();
+        this.status = status;
+        this.message = message;
+    }
+}
+
+-----------------------------
+
+package examples.boot.jpaexam.controller.advice;
+
+
+import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.WebRequest;
+
+@ControllerAdvice(annotations = RestController.class)
+@Order(1)
+public class GlobalRestControllerExceptionHandler {
+
+    @ExceptionHandler(value = { Exception.class })
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+    @ResponseBody
+    protected ApiError handleConflict(RuntimeException e,
+                                      WebRequest request) {
+        ApiError apiError =
+                new ApiError(HttpStatus.INTERNAL_SERVER_ERROR,
+                        e.getLocalizedMessage());
+        return apiError;
+    }
+
+}
+
+컨트롤러에 대한 Exception처리를 할 수 있다.
+-------------------------------------------------------
+
+@Controller가 viewname 을 반환하면 템플릿 엔진에 위해 처리된다.
+@RestController가 DTO나 객체를 반환하면 메시지 컨버터에 위해 처리된다.
+
+공부할 것 : OSiV  , OEMiV
+
+문제점 : @RestController에서 Entity를 리턴하면 json으로 변환된다.
+문제는 lazy로딩이 될 수 있다.
+
+공부할 것 : Json변환 라이브러리 Jackson (ObjectMapper), 
+          Jackson이 제공하는 애노테이션
+
+/api/boards 를 호출했더니.... 이런 오류가 발생.
+{
+"status": "INTERNAL_SERVER_ERROR",
+"message": "Type definition error: [simple type, class org.hibernate.proxy.pojo.javassist.JavassistLazyInitializer]; nested exception is com.fasterxml.jackson.databind.exc.InvalidDefinitionException: No serializer found for class org.hibernate.proxy.pojo.javassist.JavassistLazyInitializer and no properties discovered to create BeanSerializer (to avoid exception, disable SerializationFeature.FAIL_ON_EMPTY_BEANS) (through reference chain: org.springframework.data.domain.PageImpl[\"content\"]->java.util.Collections$UnmodifiableRandomAccessList[0]->examples.boot.jpaexam.domain.Board[\"boardCategory\"]->examples.boot.jpaexam.domain.BoardCategory_$$_jvst13e_4[\"handler\"])"
+}
+
+Entity 객체는 DTO 가 아니다. Entity객체는 Proxy가 사용된다.
+
+spring:
+  jackson:
+    serialization:
+      fail-on-empty-beans: false
+
+위와 같은 설정을 한다. 오류는 발생하지 않는다.
+
+{{ 결과 }}
+
+암호, 사용자 롤정보가 출력되고 끝도 없이 출력된다?
+
+암호, 사용자 롤정보등은 json으로 변환되지 않도록 @JsonIgnore 를 Entity에 붙여준다.
+
+           1    *
+Page<Board> <----> BoardFile
+
+BoardFile에서 Board쪽으로는 json메시지를 생성하지 않는다.
+@JsonBackReference을 붙인다.
+
+@JsonIgnoreProperties(value={"hibernateLazyInitializer", "handler"})
+위와 같은 애노테이션을 Entity클래스에 붙여서 proxy에 자동으로 추가된 속성을 제거할 수 있다.
+
+위와 같이 Entity에 붙이는 방법말고 jackson이 제공하는 라이브러리 중에 
+hibernateX_module이라는 것이 있다. 이를 사용하는 방법이 있다.
+
+이는 Spring의 메시지 컨버터를 수정하는 방법이다.
+
+- RestController에서 Entity를 리턴할 것이냐? 말것이냐?
+
+공부할 것 : Entity --> Dto 값을 복사를 쉽게하는 방법.
+------------------------------------
+
+공부해야할 것 : AOP
+
+@Aspect 라고 붙어 있는 클래스에서 AOP 내용을 정의한다.
+
+@Before : 메소드가 실해될 때 처리할 코드가 있는 메소드에 붙인다.
+@AfterReturning : 메소드가 종료될 때 처리할 코드가 있는 메소드에 붙인다.
+...
+
+위의 애노테이션에는 적용할 대상을 지정하는 문자열(포인트컷 표현식) 사용한다.
+
+------------------------------------
+
+
+
